@@ -1,0 +1,8 @@
+{
+  "name": "Yatra Atlas — India Travel & Budget Guide",
+  "description": "Curated editorial guide to India's iconic destinations with transparent daily budgets, seasonal weather insights, trip cost calculator, and an AI travel concierge.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

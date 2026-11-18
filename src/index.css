@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Fraunces", Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04";
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Editorial Display Headlines — Sculptural Optical Sizing */
+.editorial-display {
+  font-family: var(--font-serif);
+  font-variation-settings: "opsz" 96, "SOFT" 25;
+  letter-spacing: -0.028em;
+}
+
+/* Showcase Display Numerals — Lining Tabular Serif Figures */
+.digit-display {
+  font-family: var(--font-serif);
+  font-variant-numeric: lining-nums tabular-nums;
+  font-feature-settings: "lnum" 1, "tnum" 1;
+  font-variation-settings: "opsz" 72, "SOFT" 30;
+  letter-spacing: -0.03em;
+}
+
+/* Precision Ledger & Transit Figures — Tabular Slashed-Zero Mono */
+.digit-tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums slashed-zero;
+  font-feature-settings: "tnum" 1, "zero" 1;
+  letter-spacing: -0.02em;
+}
+
+/* Chapter & Stop Roman/Editorial Index Numerals */
+.chapter-num {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 600;
+  font-variant-numeric: lining-nums tabular-nums;
+  font-feature-settings: "lnum" 1, "tnum" 1;
+}
+
+/* Editorial Lead Paragraph Drop-Cap */
+.editorial-dropcap::first-letter {
+  font-family: var(--font-serif);
+  font-size: 3.1rem;
+  font-weight: 600;
+  line-height: 0.85;
+  float: left;
+  margin-right: 0.65rem;
+  margin-top: 0.15rem;
+  color: #9A3412;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
