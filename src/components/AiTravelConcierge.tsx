@@ -1,37 +1,16 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, RotateCcw, Copy, Check, Sparkles, Calendar } from 'lucide-react';
 import { DESTINATIONS, MONTHS_SHORT, formatMoney } from '../data/destinations';
+import {
+  generateLocalChatReply,
+  generateLocalItinerary,
+  type GeneratedItinerary,
+} from '../utils/localConcierge';
 
 interface ChatMessage {
   id: string;
   role: 'user' | 'model';
   text: string;
-}
-
-interface GeneratedItinerary {
-  tripTitle: string;
-  seasonSuitability: string;
-  recommendedTransit: string;
-  recommendedStayNote: string;
-  totalEstimatedInr: number;
-  costPerPersonInr: number;
-  budgetBreakdown: {
-    intercityTransitInr: number;
-    accommodationInr: number;
-    foodAndDiningInr: number;
-    localTransportAndGuidesInr: number;
-    ticketsAndExperiencesInr: number;
-  };
-  days: Array<{
-    dayNumber: number;
-    headline: string;
-    morning: string;
-    afternoon: string;
-    evening: string;
-    estimatedGroupSpendInr: number;
-  }>;
-  mustTryDishes: string[];
-  packingAndSavingTips: string[];
 }
 
 interface AiTravelConciergeProps {
@@ -142,6 +121,8 @@ export function AiTravelConcierge({
     setInput('');
     setIsStreaming(true);
 
+    let receivedRemoteStream = false;
+
     try {
       const response = await fetch('/api/assistant/chat', {
         method: 'POST',
@@ -153,9 +134,9 @@ export function AiTravelConcierge({
         }),
       });
 
-      if (!response.ok || !response.body) {
-        const errPayload = await response.json().catch(() => ({}));
-        throw new Error(errPayload.error || `Request failed (${response.status})`);
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok || !response.body || !contentType.includes('text/event-stream')) {
+        throw new Error('Static browser fallback');
       }
 
       const reader = response.body.getReader();
@@ -173,27 +154,36 @@ export function AiTravelConcierge({
           if (!evt.startsWith('data: ')) continue;
           const payload = evt.slice(6).trim();
           if (payload === '[DONE]') break;
-          try {
-            const parsed = JSON.parse(payload) as { text?: string; error?: string };
-            if (parsed.error) {
-              throw new Error(parsed.error);
-            }
-            if (parsed.text) {
-              setMessages((prev) =>
-                prev.map((m) => (m.id === modelMsgId ? { ...m, text: m.text + parsed.text } : m))
-              );
-            }
-          } catch (innerErr) {
-            if (innerErr instanceof Error && innerErr.message !== 'Unexpected end of JSON input') {
-              throw innerErr;
-            }
+          const parsed = JSON.parse(payload) as { text?: string; error?: string };
+          if (parsed.error) {
+            throw new Error(parsed.error);
+          }
+          if (parsed.text) {
+            receivedRemoteStream = true;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === modelMsgId ? { ...m, text: m.text + parsed.text } : m))
+            );
           }
         }
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unable to reach AI Travel Concierge.';
-      setChatError(msg);
-      setMessages((prev) => prev.filter((m) => !(m.id === modelMsgId && !m.text)));
+
+      if (!receivedRemoteStream) {
+        throw new Error('Empty remote stream');
+      }
+    } catch {
+      // Static browser mode or unavailable backend: stream deterministic curated reply locally
+      const localReply = generateLocalChatReply(cleanText, historyToSend, contextDestination);
+      const chunks = localReply.split(/(?<=\s)/);
+      let assembled = '';
+      for (let i = 0; i < chunks.length; i += 3) {
+        assembled += chunks.slice(i, i + 3).join('');
+        const snapshot = assembled;
+        setMessages((prev) =>
+          prev.map((m) => (m.id === modelMsgId ? { ...m, text: snapshot } : m))
+        );
+        await new Promise((r) => setTimeout(r, 12));
+      }
+      setChatError(null);
     } finally {
       setIsStreaming(false);
     }
@@ -228,13 +218,29 @@ export function AiTravelConcierge({
           interests,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Could not generate itinerary');
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || !contentType.includes('application/json')) {
+        throw new Error('Static browser fallback');
       }
-      setGeneratedPlan(data as GeneratedItinerary);
-    } catch (err: unknown) {
-      setPlanError(err instanceof Error ? err.message : 'Itinerary generation failed.');
+      const data = (await res.json()) as GeneratedItinerary;
+      if (!data || !Array.isArray(data.days)) {
+        throw new Error('Invalid remote itinerary payload');
+      }
+      setGeneratedPlan(data);
+    } catch {
+      // Pure browser fallback using Yatra Atlas deterministic transit, hotel & seasonal engine
+      const localPlan = generateLocalItinerary({
+        destination: destChoice,
+        originCity,
+        days: tripDays,
+        travelers,
+        budgetTier,
+        transportPreference,
+        travelMonth,
+        interests,
+      });
+      setGeneratedPlan(localPlan);
+      setPlanError(null);
     } finally {
       setIsGeneratingPlan(false);
     }

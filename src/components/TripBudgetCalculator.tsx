@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Trash2, Copy, Check, Sparkles, Bookmark, FolderOpen, Train, Plane, Bus } from 'lucide-react';
 import {
   DESTINATIONS,
@@ -8,62 +8,16 @@ import {
   TRANSPORT_MODE_LABELS,
   formatMoney,
 } from '../data/destinations';
+import {
+  computeTripEstimate,
+  loadLocalTrips,
+  saveLocalTrip,
+  deleteLocalTrip,
+  type SavedTripRecord,
+  type TripStopInput,
+} from '../utils/tripEngine';
 
-export interface TripStop {
-  destinationId: string;
-  days: number;
-}
-
-interface TransitLegResult {
-  destinationId: string;
-  destinationName: string;
-  requestedMode: TransportMode;
-  appliedModeLabel: string;
-  serviceName: string;
-  duration: string;
-  roundtripPerPersonInr: number;
-  groupLegCostInr: number;
-  fallbackApplied: boolean;
-  notes: string;
-}
-
-interface TripEstimateResult {
-  totalDays: number;
-  travelers: number;
-  originHub: HubCity;
-  stayTier: BudgetTier;
-  transportMode: TransportMode;
-  stayTotalInr: number;
-  intercityTransitInr: number;
-  foodTotalInr: number;
-  localTransportInr: number;
-  activitiesTotalInr: number;
-  contingencyInr: number;
-  grandTotalInr: number;
-  perPersonInr: number;
-  recommendedHotels: Array<{
-    destinationName: string;
-    hotelName: string;
-    neighborhood: string;
-    nightlyRateInr: number;
-  }>;
-  transitLegs: TransitLegResult[];
-}
-
-interface SavedTripRecord {
-  id: string;
-  title: string;
-  createdAt: string;
-  request: {
-    stops: TripStop[];
-    originHub: HubCity;
-    travelers: number;
-    stayTier: BudgetTier;
-    transportMode: TransportMode;
-    includeContingency: boolean;
-  };
-  estimate: TripEstimateResult;
-}
+export type TripStop = TripStopInput;
 
 interface TripBudgetCalculatorProps {
   stops: TripStop[];
@@ -89,11 +43,9 @@ export function TripBudgetCalculator({
   const [includeContingency, setIncludeContingency] = useState<boolean>(true);
   const [copied, setCopied] = useState<boolean>(false);
 
-  // Server-computed estimate & saved trips state
-  const [estimate, setEstimate] = useState<TripEstimateResult | null>(null);
-  const [estimateError, setEstimateError] = useState<string | null>(null);
+  // Browser-computed estimate & localStorage/server saved trips state
   const [tripNameInput, setTripNameInput] = useState<string>('');
-  const [savedTrips, setSavedTrips] = useState<SavedTripRecord[]>([]);
+  const [savedTrips, setSavedTrips] = useState<SavedTripRecord[]>(() => loadLocalTrips());
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
@@ -109,14 +61,26 @@ export function TripBudgetCalculator({
   );
 
   const fetchSavedTrips = useCallback(async () => {
+    const local = loadLocalTrips();
+    setSavedTrips(local);
     try {
       const res = await fetch('/api/trips');
-      if (res.ok) {
-        const data = (await res.json()) as { trips: SavedTripRecord[] };
-        setSavedTrips(data.trips ?? []);
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        const data = (await res.json()) as { trips?: SavedTripRecord[] };
+        if (Array.isArray(data.trips) && data.trips.length > 0) {
+          const merged = new Map<string, SavedTripRecord>();
+          data.trips.forEach((t) => merged.set(t.id, t));
+          local.forEach((t) => merged.set(t.id, t));
+          setSavedTrips(
+            Array.from(merged.values()).sort(
+              (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            )
+          );
+        }
       }
     } catch {
-      // Ignore network hiccup on initial list
+      // Pure static mode: localStorage stays authoritative
     }
   }, []);
 
@@ -124,37 +88,18 @@ export function TripBudgetCalculator({
     void fetchSavedTrips();
   }, [fetchSavedTrips]);
 
-  useEffect(() => {
-    let active = true;
-    const runEstimate = async () => {
-      try {
-        setEstimateError(null);
-        const res = await fetch('/api/trip/estimate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            stops,
-            originHub,
-            travelers,
-            stayTier: tier,
-            transportMode,
-            includeContingency,
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to compute estimate');
-        if (active) setEstimate(data as TripEstimateResult);
-      } catch (err: unknown) {
-        if (active) {
-          setEstimateError(err instanceof Error ? err.message : 'Unable to calculate budget.');
-        }
-      }
-    };
-    void runEstimate();
-    return () => {
-      active = false;
-    };
-  }, [stops, originHub, travelers, tier, transportMode, includeContingency]);
+  const estimate = useMemo(
+    () =>
+      computeTripEstimate({
+        stops,
+        originHub,
+        travelers,
+        stayTier: tier,
+        transportMode,
+        includeContingency,
+      }),
+    [stops, originHub, travelers, tier, transportMode, includeContingency]
+  );
 
   const stayTotal = estimate?.stayTotalInr ?? 0;
   const intercityTotal = estimate?.intercityTransitInr ?? 0;
@@ -178,30 +123,40 @@ export function TripBudgetCalculator({
     if (stops.length === 0 || isSaving) return;
     setIsSaving(true);
     setSaveMessage(null);
+    const requestPayload = {
+      stops,
+      originHub,
+      travelers,
+      stayTier: tier,
+      transportMode,
+      includeContingency,
+    };
+
     try {
-      const res = await fetch('/api/trips', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: tripNameInput.trim() || undefined,
-          request: {
-            stops,
-            originHub,
-            travelers,
-            stayTier: tier,
-            transportMode,
-            includeContingency,
-          },
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Save failed');
+      const savedLocal = saveLocalTrip(tripNameInput, requestPayload);
       setTripNameInput('');
-      setSaveMessage(`Saved "${data.title}"`);
-      await fetchSavedTrips();
+      setSaveMessage(`Saved "${savedLocal.title}"`);
+      setSavedTrips(loadLocalTrips());
+
+      // Best-effort sync if backend API is active
+      try {
+        const res = await fetch('/api/trips', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: savedLocal.title,
+            request: requestPayload,
+          }),
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          await fetchSavedTrips();
+        }
+      } catch {
+        // Running statically in browser — localStorage already persisted the trip
+      }
+
       setTimeout(() => setSaveMessage(null), 3000);
-    } catch (err: unknown) {
-      setEstimateError(err instanceof Error ? err.message : 'Unable to save trip.');
     } finally {
       setIsSaving(false);
     }
@@ -217,11 +172,12 @@ export function TripBudgetCalculator({
   };
 
   const handleDeleteTrip = async (id: string) => {
+    const remaining = deleteLocalTrip(id);
+    setSavedTrips(remaining);
     try {
       await fetch(`/api/trips/${id}`, { method: 'DELETE' });
-      await fetchSavedTrips();
     } catch {
-      // Ignore transient delete error
+      // Static mode: already removed from localStorage
     }
   };
 
@@ -498,7 +454,7 @@ Total Estimated Budget: ${formatMoney(grandTotal)} (${formatMoney(perPerson)} pe
                   Save & Reload Trip Plans
                 </h3>
                 <p className="text-xs text-[#78716C]">
-                  Store custom multi-city estimates on the server to compare scenarios later.
+                  Save custom multi-city estimates in your browser to compare scenarios later.
                 </p>
               </div>
               {saveMessage && (
@@ -568,7 +524,7 @@ Total Estimated Budget: ${formatMoney(grandTotal)} (${formatMoney(perPerson)} pe
         {/* Right: Cost Summary Card */}
         <div className="lg:col-span-5 bg-[#FAF6EE] border border-[#C9B99B] rounded-xl p-6 space-y-6">
           <div className="pb-5 border-b border-[#E6DAC4]">
-            <p className="text-xs font-medium text-[#78716C]">Server-Verified Trip Estimate (INR ₹)</p>
+            <p className="text-xs font-medium text-[#78716C]">Itemized Trip Estimate (INR ₹)</p>
             <div className="flex flex-wrap items-baseline justify-between gap-4 mt-1.5">
               <p className="digit-display text-4xl sm:text-5xl font-semibold text-[#1C1917] leading-none">
                 {formatMoney(grandTotal)}
@@ -578,11 +534,6 @@ Total Estimated Budget: ${formatMoney(grandTotal)} (${formatMoney(perPerson)} pe
                 <span className="font-sans text-xs font-medium text-[#57534E]"> / traveler</span>
               </p>
             </div>
-            {estimateError && (
-              <p role="alert" className="text-xs text-[#9A3412] mt-2">
-                {estimateError}
-              </p>
-            )}
           </div>
 
           {/* Horizontal Cost Share Bar */}

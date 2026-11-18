@@ -50,18 +50,21 @@ export default function App() {
   const [aiContextDest, setAiContextDest] = useState<string | null>(null);
   const [externalAiPrompt, setExternalAiPrompt] = useState<string | null>(null);
 
-  // Sync catalog from backend REST endpoint
+  // Sync catalog from backend REST endpoint when available; keep static catalog otherwise
   useEffect(() => {
     let active = true;
     fetch('/api/destinations')
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => {
+        const contentType = res.headers.get('content-type') || '';
+        return res.ok && contentType.includes('application/json') ? res.json() : null;
+      })
       .then((data: { destinations?: Destination[] } | null) => {
         if (active && data?.destinations && data.destinations.length > 0) {
           setDestinations(data.destinations);
         }
       })
       .catch(() => {
-        // Retain static bundle catalog if offline
+        // Retain static bundle catalog when running purely in-browser
       });
     return () => {
       active = false;

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Compass } from 'lucide-react';
 
 interface ResilientImageProps {
@@ -11,7 +11,15 @@ interface ResilientImageProps {
 export function ResilientImage({ src, alt, title, className = '' }: ResilientImageProps) {
   const [hasError, setHasError] = useState(false);
 
-  if (hasError || !src) {
+  useEffect(() => {
+    setHasError(false);
+  }, [src]);
+
+  const resolvedSrc = src.startsWith('/src/assets/')
+    ? `${import.meta.env.BASE_URL}${src.slice(1)}`
+    : src;
+
+  if (hasError || !resolvedSrc) {
     return (
       <div
         className={`flex flex-col items-center justify-center bg-[#EFEAE0] text-[#57534E] border border-[#E5DEC9] p-6 text-center ${className}`}
@@ -27,7 +35,7 @@ export function ResilientImage({ src, alt, title, className = '' }: ResilientIma
 
   return (
     <img
-      src={src}
+      src={resolvedSrc}
       alt={alt}
       referrerPolicy="no-referrer"
       onError={() => setHasError(true)}
